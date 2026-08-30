@@ -1,6 +1,6 @@
 # LumaLearn Accessible Study
 
-A gentle, accessible study companion for building focus, confidence, and momentum through short guided lessons.
+LumaLearn is a gentle, accessible study companion for building focus, confidence, and momentum through short guided lessons.
 
 ## Free module
 
@@ -12,6 +12,6 @@ A gentle, accessible study companion for building focus, confidence, and momentu
 
 ## Run locally
 
-`pnpm install`
+Install dependencies with `pnpm install`, then run:
 
 `PORT=18335 BASE_PATH=/ pnpm --filter @workspace/lumalearn-study run dev`

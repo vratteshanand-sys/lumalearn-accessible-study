@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "LumaLearn Accessible Study"
+description = "An accessible study companion that helps students build focus, confidence, and momentum through guided free lessons, adaptive practice, and calm progress tracking."
+version = "1.0.0"
+id = "artifacts/lumalearn-study"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18335
+
+[services.development]
+run = "pnpm --filter @workspace/lumalearn-study run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/lumalearn-study", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/lumalearn-study/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18335"
+BASE_PATH = "/"
