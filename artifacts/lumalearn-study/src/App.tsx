@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Route, Switch, Link, useLocation, Router as WouterRouter } from 'wouter';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -33,15 +33,26 @@ function useLocalProgress() {
     if (typeof window === 'undefined') return initialProgress;
     try {
       const stored = window.localStorage.getItem('lumalearn-progress');
-      return stored ? { ...initialProgress, ...JSON.parse(stored) } : initialProgress;
+      if (!stored) return initialProgress;
+      const parsed: unknown = JSON.parse(stored);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return initialProgress;
+      const saved = parsed as Partial<ProgressState>;
+      const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+      const answered = count(saved.practiceAnswered);
+      return {
+        completedLessons: Array.isArray(saved.completedLessons) && saved.completedLessons.includes(1) ? [1] : [],
+        practiceAnswered: answered, practiceCorrect: Math.min(count(saved.practiceCorrect), answered),
+        streak: count(saved.streak), sessions: count(saved.sessions), totalFocusMinutes: count(saved.totalFocusMinutes),
+        textSize: saved.textSize === 'large' ? 'large' : 'normal', reducedMotion: saved.reducedMotion === true,
+      };
     } catch { return initialProgress; }
   });
   useEffect(() => {
-    window.localStorage.setItem('lumalearn-progress', JSON.stringify(progress));
+    try { window.localStorage.setItem('lumalearn-progress', JSON.stringify(progress)); } catch { /* Study still works when storage is unavailable. */ }
     document.documentElement.classList.toggle('text-large', progress.textSize === 'large');
     document.documentElement.classList.toggle('reduce-motion', progress.reducedMotion);
   }, [progress]);
-  const update = (change: Partial<ProgressState>) => setProgress((current) => ({ ...current, ...change }));
+  const update = useCallback((change: Partial<ProgressState>) => setProgress((current) => ({ ...current, ...change })), []);
   return { progress, update, setProgress };
 }
 
@@ -163,27 +174,32 @@ function StudyPage({ progress, update }: { progress: ProgressState; update: (cha
   const section = lessonSections[Math.min(step, 1)];
   const isComplete = step === 3;
   const chooseAnswer = (choice: string) => {
-    if (answer) return;
+    if (answer === 'B' || answer === choice) return;
     setAnswer(choice);
     update({ practiceAnswered: progress.practiceAnswered + 1, practiceCorrect: progress.practiceCorrect + (choice === 'B' ? 1 : 0) });
   };
+  useEffect(() => {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    return () => { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); };
+  }, [step]);
   const speak = () => {
     if (!('speechSynthesis' in window)) return;
     if (isSpeaking) { window.speechSynthesis.cancel(); setIsSpeaking(false); return; }
     const utterance = new SpeechSynthesisUtterance(`${section.title}. ${section.body}. Helpful note: ${section.tip}`);
     utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
     window.speechSynthesis.speak(utterance); setIsSpeaking(true);
   };
   const completeLesson = () => { update({ completedLessons: progress.completedLessons.includes(1) ? progress.completedLessons : [...progress.completedLessons, 1], streak: progress.streak || 1 }); setStep(3); };
-  const next = () => { if (step === 2) completeLesson(); else setStep((current) => Math.min(current + 1, 3)); };
+  const next = () => { if (step === 2 && answer !== 'B') return; if (step === 2) completeLesson(); else setStep((current) => Math.min(current + 1, 3)); };
   return <div className="page-wrap">
     <div className="mb-7 flex flex-wrap items-center justify-between gap-4"><div><p className="eyebrow">Free module · reading skills</p><h1 className="mt-2 font-display text-4xl font-semibold">Find the main idea</h1></div><span className="rounded-full border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-3 py-2 text-xs font-semibold text-[hsl(var(--muted-foreground))]">Step {isComplete ? 3 : step + 1} of 3</span></div>
     <div className="mb-7 flex items-center gap-2" aria-label="Lesson progress">{[0, 1, 2].map((number) => <span key={number} className={`h-2 flex-1 rounded-full ${step > number || isComplete ? 'bg-[hsl(var(--primary))]' : step === number ? 'bg-[hsl(var(--accent))]' : 'bg-[hsl(var(--muted))]'}`} />)}</div>
     {!isComplete ? <div className="grid gap-7 lg:grid-cols-[minmax(0,1fr)_280px]">
       <section className="surface rounded-3xl p-6 sm:p-10" aria-live="polite">
         {step < 2 ? <><div className="mb-8 flex flex-wrap items-center justify-between gap-3"><span className="flex items-center gap-2 text-sm font-semibold text-[hsl(var(--primary))]"><BookOpen size={17} aria-hidden="true" />{step === 0 ? 'Before we begin' : 'Lesson 1 of 1'}</span><button className="button-quiet border border-[hsl(var(--border))]" onClick={speak} disabled={!('speechSynthesis' in window)} aria-pressed={isSpeaking} data-testid="button-read-aloud"><Volume2 size={17} aria-hidden="true" />{isSpeaking ? 'Stop reading' : 'Read aloud'}</button></div>
-          {step === 0 ? <><h2 className="font-display text-3xl font-semibold sm:text-4xl">Let’s make one idea feel clearer.</h2><p className="reading-copy mt-5 max-w-2xl text-lg leading-8 text-[hsl(var(--muted-foreground))]">In this short lesson, you will learn a simple way to spot the main idea in a paragraph. You can take your time, reread anything, and skip back whenever you need.</p><div className="mt-8 rounded-2xl bg-[hsl(var(--secondary)/.35)] p-5"><p className="flex gap-3 text-sm font-semibold leading-6"><Lightbulb size={19} className="mt-0.5 shrink-0 text-[hsl(var(--primary))]" aria-hidden="true" />There is no perfect pace. Understanding one thing is enough for today.</p></div></> : <><p className="eyebrow">{section.title}</p><h2 className="mt-3 font-display text-3xl font-semibold">{section.body}</h2><p className="reading-copy mt-7 text-lg leading-8 text-[hsl(var(--muted-foreground))]">{section.tip}</p><div className={`mt-8 rounded-2xl border p-5 transition-colors ${comfortableReading ? 'border-[hsl(var(--primary)/.35)] bg-[hsl(var(--primary)/.07)]' : 'border-[hsl(var(--border))] bg-[hsl(var(--muted)/.42)]'}`}><p className="text-sm font-semibold">Try this on your next paragraph</p><p className="mt-2 text-sm leading-6 text-[hsl(var(--muted-foreground))]">Read the heading, then the first sentence. Say the topic in your own words before looking at the details.</p></div></>}</> : <><div className="mb-8 flex items-center gap-2 text-sm font-semibold text-[hsl(var(--primary))]"><CircleHelp size={18} aria-hidden="true" />Quick check</div><h2 className="font-display text-3xl font-semibold">Which sentence is most likely the main idea?</h2><p className="mt-3 text-[hsl(var(--muted-foreground))]">Read the short paragraph, then choose the big message.</p><div className="mt-6 rounded-2xl bg-[hsl(var(--muted)/.5)] p-5 text-sm leading-7">“Mina moved her plant closer to the window. Within a week, its new leaves looked brighter. She learned that the plant needed more light to grow.”</div><div className="mt-5 space-y-3">{[['A', 'Mina has a plant.'], ['B', 'Plants need the right light to grow.'], ['C', 'Mina has a window.']].map(([letter, text]) => <button key={letter} onClick={() => chooseAnswer(letter)} className={`choice ${answer === letter ? (letter === 'B' ? 'correct' : 'incorrect') : ''}`} aria-pressed={answer === letter} data-testid={`button-answer-${letter.toLowerCase()}`}><span className="choice-letter">{letter}</span><span className="text-sm font-semibold">{text}</span>{answer === letter && (letter === 'B' ? <Check className="ml-auto text-[hsl(155_47%_32%)]" size={18} aria-hidden="true" /> : <X className="ml-auto text-[hsl(var(--accent))]" size={18} aria-hidden="true" />)}</button>)}</div>{answer && <p className={`mt-4 rounded-xl p-4 text-sm font-semibold ${answer === 'B' ? 'bg-[hsl(155_47%_38%/.12)] text-[hsl(155_47%_28%)]' : 'bg-[hsl(var(--accent)/.12)]'}`} role="status">{answer === 'B' ? 'That’s it. You found the big message behind the details.' : 'Almost. Look for the sentence that connects all three details.'}</p>}</>}
-        <div className="mt-10 flex flex-wrap justify-between gap-3 border-t border-[hsl(var(--border))] pt-6"><button className="button-secondary" onClick={() => setStep((current) => Math.max(0, current - 1))} disabled={step === 0} data-testid="button-previous-step"><ChevronLeft size={18} aria-hidden="true" />Back</button><button className="button-primary" onClick={next} disabled={step === 2 && !answer} data-testid="button-next-step">{step === 2 ? 'Finish lesson' : 'Continue'}<ChevronRight size={18} aria-hidden="true" /></button></div>
+          {step === 0 ? <><h2 className="font-display text-3xl font-semibold sm:text-4xl">Let’s make one idea feel clearer.</h2><p className="reading-copy mt-5 max-w-2xl text-lg leading-8 text-[hsl(var(--muted-foreground))]">In this short lesson, you will learn a simple way to spot the main idea in a paragraph. You can take your time, reread anything, and skip back whenever you need.</p><div className="mt-8 rounded-2xl bg-[hsl(var(--secondary)/.35)] p-5"><p className="flex gap-3 text-sm font-semibold leading-6"><Lightbulb size={19} className="mt-0.5 shrink-0 text-[hsl(var(--primary))]" aria-hidden="true" />There is no perfect pace. Understanding one thing is enough for today.</p></div></> : <><p className="eyebrow">{section.title}</p><h2 className="mt-3 font-display text-3xl font-semibold">{section.body}</h2><p className="reading-copy mt-7 text-lg leading-8 text-[hsl(var(--muted-foreground))]">{section.tip}</p><div className={`mt-8 rounded-2xl border p-5 transition-colors ${comfortableReading ? 'border-[hsl(var(--primary)/.35)] bg-[hsl(var(--primary)/.07)]' : 'border-[hsl(var(--border))] bg-[hsl(var(--muted)/.42)]'}`}><p className="text-sm font-semibold">Try this on your next paragraph</p><p className="mt-2 text-sm leading-6 text-[hsl(var(--muted-foreground))]">Read the heading, then the first sentence. Say the topic in your own words before looking at the details.</p></div></>}</> : <><div className="mb-8 flex items-center gap-2 text-sm font-semibold text-[hsl(var(--primary))]"><CircleHelp size={18} aria-hidden="true" />Quick check</div><h2 className="font-display text-3xl font-semibold">Which sentence is most likely the main idea?</h2><p className="mt-3 text-[hsl(var(--muted-foreground))]">Read the short paragraph, then choose the big message.</p><div className="mt-6 rounded-2xl bg-[hsl(var(--muted)/.5)] p-5 text-sm leading-7">“Mina moved her plant closer to the window. Within a week, its new leaves looked brighter. She learned that the plant needed more light to grow.”</div><div className="mt-5 space-y-3">{[['A', 'Mina has a plant.'], ['B', 'Plants need the right light to grow.'], ['C', 'Mina has a window.']].map(([letter, text]) => <button key={letter} onClick={() => chooseAnswer(letter)} className={`choice ${answer === letter ? (letter === 'B' ? 'correct' : 'incorrect') : ''}`} aria-pressed={answer === letter} data-testid={`button-answer-${letter.toLowerCase()}`}><span className="choice-letter">{letter}</span><span className="text-sm font-semibold">{text}</span>{answer === letter && (letter === 'B' ? <Check className="ml-auto text-[hsl(155_47%_32%)]" size={18} aria-hidden="true" /> : <X className="ml-auto text-[hsl(var(--accent))]" size={18} aria-hidden="true" />)}</button>)}</div>{answer && <p className={`mt-4 rounded-xl p-4 text-sm font-semibold ${answer === 'B' ? 'bg-[hsl(155_47%_38%/.12)] text-[hsl(155_47%_28%)]' : 'bg-[hsl(var(--accent)/.12)]'}`} role="status">{answer === 'B' ? 'That’s it. You found the big message behind the details.' : 'Almost. Look for the sentence that connects all three details, then try another answer.'}</p>}</>}
+        <div className="mt-10 flex flex-wrap justify-between gap-3 border-t border-[hsl(var(--border))] pt-6"><button className="button-secondary" onClick={() => setStep((current) => Math.max(0, current - 1))} disabled={step === 0} data-testid="button-previous-step"><ChevronLeft size={18} aria-hidden="true" />Back</button><button className="button-primary" onClick={next} disabled={step === 2 && answer !== 'B'} data-testid="button-next-step">{step === 2 ? 'Finish lesson' : 'Continue'}<ChevronRight size={18} aria-hidden="true" /></button></div>
       </section>
       <aside className="space-y-4" aria-label="Study supports"><div className="surface rounded-2xl p-5"><p className="mb-4 flex items-center gap-2 text-sm font-bold"><Settings2 size={17} className="text-[hsl(var(--primary))]" aria-hidden="true" />Make it comfortable</p><label className="flex cursor-pointer items-start gap-3 text-sm leading-6"><input type="checkbox" className="mt-1" checked={comfortableReading} onChange={(event) => setComfortableReading(event.target.checked)} data-testid="input-comfortable-reading" /><span><strong>Comfort reading</strong><br /><span className="text-[hsl(var(--muted-foreground))]">Give important text a little more breathing room.</span></span></label></div><div className="soft-surface rounded-2xl p-5"><Headphones size={19} className="mb-3 text-[hsl(var(--primary))]" aria-hidden="true" /><p className="text-sm font-semibold">Listening is learning</p><p className="mt-1 text-xs leading-5 text-[hsl(var(--muted-foreground))]">Use Read aloud whenever your eyes need a rest.</p></div></aside>
     </div> : <section className="surface fade-up mx-auto max-w-3xl rounded-3xl p-7 text-center sm:p-14" aria-live="polite"><span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-[hsl(var(--secondary))] text-[hsl(var(--foreground))]"><Check size={31} aria-hidden="true" /></span><p className="eyebrow mt-7">Lesson complete</p><h2 className="mt-3 font-display text-4xl font-semibold">You made space for one new idea.</h2><p className="mx-auto mt-4 max-w-lg text-base leading-7 text-[hsl(var(--muted-foreground))]">That is real progress. Your lesson is saved on this device, ready whenever you want to return.</p><div className="mt-8 flex flex-wrap justify-center gap-3"><Link className="button-primary" href="/"><Home size={18} aria-hidden="true" />Back to today</Link><Link className="button-secondary" href="/focus"><Clock3 size={18} aria-hidden="true" />Try a focus session</Link></div></section>}
@@ -195,7 +211,17 @@ function FocusPage({ progress, update }: { progress: ProgressState; update: (cha
   const [seconds, setSeconds] = useState(600);
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
-  useEffect(() => { if (!running) return; const timer = window.setInterval(() => setSeconds((value) => { if (value <= 1) { window.clearInterval(timer); setRunning(false); setFinished(true); update({ sessions: progress.sessions + 1, totalFocusMinutes: progress.totalFocusMinutes + duration, streak: progress.streak || 1 }); return 0; } return value - 1; }), 1000); return () => window.clearInterval(timer); }, [running, duration, progress.sessions, progress.totalFocusMinutes, progress.streak, update]);
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => setSeconds((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+  useEffect(() => {
+    if (!running || seconds !== 0) return;
+    setRunning(false);
+    setFinished(true);
+    update({ sessions: progress.sessions + 1, totalFocusMinutes: progress.totalFocusMinutes + duration, streak: progress.streak || 1 });
+  }, [running, seconds, duration, progress.sessions, progress.totalFocusMinutes, progress.streak, update]);
   const setTimer = (minutes: number) => { setDuration(minutes); setSeconds(minutes * 60); setRunning(false); setFinished(false); };
   const reset = () => { setSeconds(duration * 60); setRunning(false); setFinished(false); };
   const minutes = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -232,7 +258,7 @@ function NotFoundPage() {
 
 function Router() {
   const { progress, update } = useLocalProgress();
-  return <AppShell progress={progress} update={update}><Switch><Route path="/" component={() => <HomePage progress={progress} />} /><Route path="/study" component={() => <StudyPage progress={progress} update={update} />} /><Route path="/focus" component={() => <FocusPage progress={progress} update={update} />} /><Route path="/progress" component={() => <ProgressPage progress={progress} update={update} />} /><Route component={NotFoundPage} /></Switch></AppShell>;
+  return <AppShell progress={progress} update={update}><Switch><Route path="/"><HomePage progress={progress} /></Route><Route path="/study"><StudyPage progress={progress} update={update} /></Route><Route path="/focus"><FocusPage progress={progress} update={update} /></Route><Route path="/progress"><ProgressPage progress={progress} update={update} /></Route><Route component={NotFoundPage} /></Switch></AppShell>;
 }
 
 function RoutedErrorBoundary({ children }: { children: ReactNode }) {
